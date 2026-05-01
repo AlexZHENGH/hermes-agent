@@ -828,6 +828,8 @@ def normalize_feishu_message(
         return _normalize_share_chat_message(payload)
     if normalized_type in {"interactive", "card"}:
         return _normalize_interactive_message(normalized_type, payload)
+    if normalized_type == "location":
+        return _normalize_location_message(payload, mention_refs)
 
     return FeishuNormalizedMessage(raw_type=normalized_type, text_content="")
 
@@ -858,6 +860,60 @@ def _normalize_merge_forward_message(payload: Dict[str, Any]) -> FeishuNormalize
         text_content=text_content,
         relation_kind="merge_forward",
         metadata={"entry_count": len(entries), "title": title},
+    )
+
+
+def _normalize_location_message(
+    payload: Dict[str, Any],
+    mention_refs: List[FeishuMentionRef],
+) -> FeishuNormalizedMessage:
+    """Parse a Feishu ``location`` message into human-readable text.
+
+    Feishu location content JSON (receive payload — see
+    https://open.feishu.cn/document/server-docs/im-v1/message-content-description/message_content):
+      - ``latitude`` / ``longitude`` — decimal degrees (string)
+      - ``name`` — location name (e.g. "金爵别墅")
+
+    The sending/UI may also surface ``address`` and ``title``, but they are
+    absent from the receive payload.  We accept ``location_name`` as a
+    fallback for ``name`` for resilience.
+    """
+    latitude = str(payload.get("latitude", "") or "").strip()
+    longitude = str(payload.get("longitude", "") or "").strip()
+    # Primary key per Feishu receive schema; fall back to location_name
+    name = str(payload.get("name", "") or payload.get("location_name", "") or "").strip()
+    address = str(payload.get("address", "") or "").strip()
+    title = str(payload.get("title", "") or "").strip()
+
+    parts: List[str] = []
+    if title:
+        parts.append(f"📍 {title}")
+    elif name:
+        parts.append(f"📍 {name}")
+    else:
+        parts.append("📍 Location")
+
+    if address:
+        parts.append(f"   Address: {address}")
+    elif name and name != title:
+        parts.append(f"   {name}")
+    if latitude and longitude:
+        parts.append(f"   Coordinates: {latitude}, {longitude}")
+
+    text_content = "\n".join(parts)
+    return FeishuNormalizedMessage(
+        raw_type="location",
+        text_content=text_content,
+        relation_kind="location",
+        metadata={
+            "latitude": latitude,
+            "longitude": longitude,
+            "name": name,
+            "location_name": name,  # kept for backward compat
+            "address": address,
+            "title": title,
+        },
+        mentions=list(mention_refs),
     )
 
 
