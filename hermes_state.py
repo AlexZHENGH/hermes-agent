@@ -974,7 +974,9 @@ class SessionDB:
         compressed continuations from being invisible to users while keeping
         delegate subagents and branches hidden. Pass ``False`` to return the
         raw root rows (useful for admin/debug UIs).
-        """
+
+        When *chat_id* is provided, results are scoped to sessions belonging
+        to that chat/channel (e.g. a Feishu group or Telegram chat)."""
         where_clauses = []
         params = []
 

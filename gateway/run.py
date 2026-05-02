@@ -5401,11 +5401,16 @@ class GatewayRunner:
         # Load conversation history from transcript
         history = self.session_store.load_transcript(session_entry.session_id)
 
-        # -----------------------------------------------------------------
-        # Context recovery: when a session restarts (history is empty),
-        # inject the last few message pairs from the prior session with
-        # the same chat_id so the agent picks up where it left off.
-        # -----------------------------------------------------------------
+        # ── Context recovery after gateway restart ──────────────────────────
+        # Gateway restarts create a fresh session (empty history). To avoid
+        # losing conversational continuity, we query SessionDB for the most
+        # recent N (user, assistant) message pairs from the same chat_id and
+        # inject them as a <history> preamble into the new session.
+        #
+        # Data flow:  gateway/platform → session.py → SessionDB (chat_id col)
+        #             gateway/run.py   → get_last_messages_by_chat() → <history>
+        #
+        # See also: hermes-fork-workflow/references/context-recovery-implementation.md
         if not history and source.chat_id and self._session_db:
             try:
                 prior = self._session_db.get_last_messages_by_chat(
