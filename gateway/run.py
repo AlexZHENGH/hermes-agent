@@ -5412,6 +5412,10 @@ class GatewayRunner:
         #
         # See also: hermes-fork-workflow/references/context-recovery-implementation.md
         if not history and source.chat_id and self._session_db:
+            logger.debug(
+                "Context recovery: injecting prior messages for chat_id=%s session=%s",
+                source.chat_id, session_entry.session_id,
+            )
             try:
                 prior = self._session_db.get_last_messages_by_chat(
                     source.chat_id,
@@ -5441,6 +5445,20 @@ class GatewayRunner:
                         "</history>"
                     ),
                 })
+                logger.info(
+                    "Context recovery: injected %d prior messages from chat_id=%s",
+                    len(prior), source.chat_id,
+                )
+            else:
+                logger.debug(
+                    "Context recovery: no prior messages found for chat_id=%s",
+                    source.chat_id,
+                )
+        elif not history:
+            logger.debug(
+                "Context recovery: skipped — history_empty=%s chat_id=%s db=%s",
+                not history, bool(source.chat_id), bool(self._session_db),
+            )
 
         # -----------------------------------------------------------------
         # Session hygiene: auto-compress pathologically large transcripts
