@@ -1214,6 +1214,9 @@ class SessionDB:
         surfaces in the correct slot. Ordering is computed at SQL level via
         a recursive CTE that walks compression-continuation edges, so LIMIT
         and OFFSET still apply efficiently.
+
+        When *chat_id* is provided, results are scoped to sessions belonging
+        to that chat/channel (e.g. a Feishu group or Telegram chat).
         """
         where_clauses = []
         params = []
