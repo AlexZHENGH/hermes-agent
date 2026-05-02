@@ -932,6 +932,8 @@ AUTHOR_MAP = {
     "jhin.lee@unity3d.com": "leehack",  # PR #22053 salvage (telegram DM topic reply fallback)
     # pander: empty email, salvaged via PR #19665 from #16126 by @ms-alan
     "ayman.a.kamal@hotmail.com": "A-kamal",  # PR #18678 (xAI image resolution fix)
+    # alex-custom fork (May 2026)
+    "cnzhenghan@gmail.com": "AlexZHENGH",
 }
 
 
