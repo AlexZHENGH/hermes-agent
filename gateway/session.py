@@ -920,6 +920,7 @@ class SessionStore:
                 "session_id": session_id,
                 "source": source.platform.value,
                 "user_id": source.user_id,
+                "chat_id": source.chat_id,
             }
 
         # SQLite operations outside the lock
