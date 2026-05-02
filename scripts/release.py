@@ -644,6 +644,8 @@ AUTHOR_MAP = {
     "web3blind@gmail.com": "web3blind",
     "ztzheng@163.com": "chengoak",  # PR #17467
     "24110240104@m.fudan.edu.cn": "YuShu",  # co-author only
+    # alex-custom fork (May 2026)
+    "cnzhenghan@gmail.com": "AlexZHENGH",
 }
 
 
