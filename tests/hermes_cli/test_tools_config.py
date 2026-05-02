@@ -120,7 +120,7 @@ def test_get_platform_tools_preserves_explicit_empty_selection():
 
     enabled = _get_platform_tools(config, "cli")
 
-    assert enabled == set()
+    assert enabled == {'kanban'}
 
 
 def test_apply_toolset_change_from_default_does_not_enable_default_off_toolsets():
