@@ -5400,7 +5400,48 @@ class GatewayRunner:
 
         # Load conversation history from transcript
         history = self.session_store.load_transcript(session_entry.session_id)
-        
+
+        # ── Context recovery after gateway restart ──────────────────────────
+        # Gateway restarts create a fresh session (empty history). To avoid
+        # losing conversational continuity, we query SessionDB for the most
+        # recent N (user, assistant) message pairs from the same chat_id and
+        # inject them as a <history> preamble into the new session.
+        #
+        # Data flow:  gateway/platform → session.py → SessionDB (chat_id col)
+        #             gateway/run.py   → get_last_messages_by_chat() → <history>
+        #
+        # See also: hermes-fork-workflow/references/context-recovery-implementation.md
+        if not history and source.chat_id and self._session_db:
+            try:
+                prior = self._session_db.get_last_messages_by_chat(
+                    source.chat_id,
+                    n_pairs=3,
+                    exclude_session_id=session_entry.session_id,
+                )
+            except Exception:
+                prior = []
+            if prior:
+                lines: list[str] = []
+                for m in prior:
+                    role = "👤" if m["role"] == "user" else "🤖"
+                    text = (m.get("content") or "")[:500].replace("\n", " ")
+                    lines.append(f"{role} {text}")
+                history_block = "\n".join(lines)
+                history.insert(0, {
+                    "role": "user",
+                    "content": (
+                        "<history>\n"
+                        "The following is a summary of the conversation "
+                        "immediately before this session was reset:\n\n"
+                        f"{history_block}\n\n"
+                        "Use this context to understand what was being "
+                        "discussed. If the user references 'earlier' or "
+                        "'before' or sends a follow-up question, this is "
+                        "what they are referring to.\n"
+                        "</history>"
+                    ),
+                })
+
         # -----------------------------------------------------------------
         # Session hygiene: auto-compress pathologically large transcripts
         #

@@ -920,6 +920,9 @@ class SessionStore:
                 "session_id": session_id,
                 "source": source.platform.value,
                 "user_id": source.user_id,
+                # Capture chat_id so SessionDB can scope queries and power
+                # cross-session context recovery after gateway restarts.
+                "chat_id": source.chat_id,
             }
 
         # SQLite operations outside the lock
@@ -1140,6 +1143,9 @@ class SessionStore:
                 "session_id": session_id,
                 "source": old_entry.platform.value if old_entry.platform else "unknown",
                 "user_id": old_entry.origin.user_id if old_entry.origin else None,
+                # Persist chat_id into the successor session so context recovery
+                # can link reset sessions to the same chat/channel.
+                "chat_id": old_entry.origin.chat_id if old_entry.origin else None,
             }
 
         if self._db and db_end_session_id:

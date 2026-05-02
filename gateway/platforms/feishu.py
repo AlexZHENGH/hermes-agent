@@ -387,6 +387,7 @@ class FeishuAdapterSettings:
     admins: frozenset[str] = frozenset()
     default_group_policy: str = ""
     group_rules: Dict[str, FeishuGroupRule] = field(default_factory=dict)
+    require_mention: bool = True
 
 
 @dataclass
@@ -828,6 +829,8 @@ def normalize_feishu_message(
         return _normalize_share_chat_message(payload)
     if normalized_type in {"interactive", "card"}:
         return _normalize_interactive_message(normalized_type, payload)
+    if normalized_type == "location":
+        return _normalize_location_message(payload, mention_refs)
 
     return FeishuNormalizedMessage(raw_type=normalized_type, text_content="")
 
@@ -858,6 +861,60 @@ def _normalize_merge_forward_message(payload: Dict[str, Any]) -> FeishuNormalize
         text_content=text_content,
         relation_kind="merge_forward",
         metadata={"entry_count": len(entries), "title": title},
+    )
+
+
+def _normalize_location_message(
+    payload: Dict[str, Any],
+    mention_refs: List[FeishuMentionRef],
+) -> FeishuNormalizedMessage:
+    """Parse a Feishu ``location`` message into human-readable text.
+
+    Feishu location content JSON (receive payload — see
+    https://open.feishu.cn/document/server-docs/im-v1/message-content-description/message_content):
+      - ``latitude`` / ``longitude`` — decimal degrees (string)
+      - ``name`` — location name (e.g. "金爵别墅")
+
+    The sending/UI may also surface ``address`` and ``title``, but they are
+    absent from the receive payload.  We accept ``location_name`` as a
+    fallback for ``name`` for resilience.
+    """
+    latitude = str(payload.get("latitude", "") or "").strip()
+    longitude = str(payload.get("longitude", "") or "").strip()
+    # Primary key per Feishu receive schema; fall back to location_name
+    name = str(payload.get("name", "") or payload.get("location_name", "") or "").strip()
+    address = str(payload.get("address", "") or "").strip()
+    title = str(payload.get("title", "") or "").strip()
+
+    parts: List[str] = []
+    if title:
+        parts.append(f"📍 {title}")
+    elif name:
+        parts.append(f"📍 {name}")
+    else:
+        parts.append("📍 Location")
+
+    if address:
+        parts.append(f"   Address: {address}")
+    elif name and name != title:
+        parts.append(f"   {name}")
+    if latitude and longitude:
+        parts.append(f"   Coordinates: {latitude}, {longitude}")
+
+    text_content = "\n".join(parts)
+    return FeishuNormalizedMessage(
+        raw_type="location",
+        text_content=text_content,
+        relation_kind="location",
+        metadata={
+            "latitude": latitude,
+            "longitude": longitude,
+            "name": name,
+            "location_name": name,  # kept for backward compat
+            "address": address,
+            "title": title,
+        },
+        mentions=list(mention_refs),
     )
 
 
@@ -1446,6 +1503,7 @@ class FeishuAdapter(BasePlatformAdapter):
             admins=admins,
             default_group_policy=default_group_policy,
             group_rules=group_rules,
+            require_mention=_to_boolean(os.getenv("FEISHU_REQUIRE_MENTION", "true")),
         )
 
     def _apply_settings(self, settings: FeishuAdapterSettings) -> None:
@@ -1459,6 +1517,7 @@ class FeishuAdapter(BasePlatformAdapter):
         self._allowed_group_users = set(settings.allowed_group_users)
         self._admins = set(settings.admins)
         self._default_group_policy = settings.default_group_policy or settings.group_policy
+        self._require_mention = settings.require_mention
         self._group_rules = settings.group_rules
         self._bot_open_id = settings.bot_open_id
         self._bot_user_id = settings.bot_user_id
@@ -3626,9 +3685,17 @@ class FeishuAdapter(BasePlatformAdapter):
         return bool(sender_ids and (sender_ids & self._allowed_group_users))
 
     def _should_accept_group_message(self, message: Any, sender_id: Any, chat_id: str = "") -> bool:
-        """Require an explicit @mention before group messages enter the agent."""
+        """Require an explicit @mention before group messages enter the agent.
+
+        When ``require_mention`` is disabled (e.g. ``FEISHU_REQUIRE_MENTION=false``),
+        the mention check is skipped — any group message passing the policy gate
+        will enter the agent.  This matches the behaviour of Telegram / Discord /
+        Slack when their ``require_mention`` configs are turned off.
+        """
         if not self._allow_group_message(sender_id, chat_id):
             return False
+        if not self._require_mention:
+            return True
         # @_all is Feishu's @everyone placeholder — always route to the bot.
         raw_content = getattr(message, "content", "") or ""
         if "@_all" in raw_content:

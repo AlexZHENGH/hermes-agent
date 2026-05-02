@@ -202,6 +202,25 @@ class SessionDB:
         self._conn.execute("PRAGMA foreign_keys=ON")
 
         self._init_schema()
+        self._ensure_chat_id_column()
+
+    def _ensure_chat_id_column(self):
+        """Add ``chat_id`` column to sessions table (idempotent).
+
+        Uses a bare ``ALTER TABLE`` so upstream upgrades stay zero-conflict:
+        if upstream later adds a ``chat_id`` column, this becomes a no-op.
+        Does NOT touch ``SCHEMA_VERSION``.
+        """
+        try:
+            self._conn.execute(
+                "ALTER TABLE sessions ADD COLUMN chat_id TEXT"
+            )
+        except sqlite3.OperationalError:
+            pass  # Column already exists
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_sessions_chat_id "
+            "ON sessions(chat_id, started_at DESC)"
+        )
 
     # ── Core write helper ──
 
@@ -523,13 +542,14 @@ class SessionDB:
         system_prompt: str = None,
         user_id: str = None,
         parent_session_id: str = None,
+        chat_id: str = None,
     ) -> str:
         """Create a new session record. Returns the session_id."""
         def _do(conn):
             conn.execute(
                 """INSERT OR IGNORE INTO sessions (id, source, user_id, model, model_config,
-                   system_prompt, parent_session_id, started_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                   system_prompt, parent_session_id, chat_id, started_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     session_id,
                     source,
@@ -538,6 +558,7 @@ class SessionDB:
                     json.dumps(model_config) if model_config else None,
                     system_prompt,
                     parent_session_id,
+                    chat_id,
                     time.time(),
                 ),
             )
@@ -933,6 +954,7 @@ class SessionDB:
         offset: int = 0,
         include_children: bool = False,
         project_compression_tips: bool = True,
+        chat_id: str = None,
     ) -> List[Dict[str, Any]]:
         """List sessions with preview (first user message) and last active timestamp.
 
@@ -952,7 +974,9 @@ class SessionDB:
         compressed continuations from being invisible to users while keeping
         delegate subagents and branches hidden. Pass ``False`` to return the
         raw root rows (useful for admin/debug UIs).
-        """
+
+        When *chat_id* is provided, results are scoped to sessions belonging
+        to that chat/channel (e.g. a Feishu group or Telegram chat)."""
         where_clauses = []
         params = []
 
@@ -977,6 +1001,9 @@ class SessionDB:
             placeholders = ",".join("?" for _ in exclude_sources)
             where_clauses.append(f"s.source NOT IN ({placeholders})")
             params.extend(exclude_sources)
+        if chat_id:
+            where_clauses.append("s.chat_id = ?")
+            params.append(chat_id)
 
         where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
         query = f"""
@@ -1797,6 +1824,60 @@ class SessionDB:
     # =========================================================================
     # Utility
     # =========================================================================
+
+    def get_last_messages_by_chat(
+        self,
+        chat_id: str,
+        n_pairs: int = 3,
+        exclude_session_id: str = None,
+    ) -> List[Dict[str, Any]]:
+        """Return the last *n_pairs* of (user, assistant) messages from the
+        most recent session with *chat_id* (excluding *exclude_session_id*).
+
+        Used by the gateway to inject conversation context after a restart.
+        Returns messages in chronological order with ``role`` and ``content``
+        keys.  Returns an empty list when no matching session exists.
+        """
+        if not chat_id:
+            return []
+
+        with self._lock:
+            # Find the most recent session with this chat_id
+            params: list = [chat_id]
+            where = "WHERE s.chat_id = ?"
+            if exclude_session_id:
+                where += " AND s.id != ?"
+                params.append(exclude_session_id)
+            row = self._conn.execute(
+                f"SELECT s.id FROM sessions s {where} "
+                "ORDER BY s.started_at DESC LIMIT 1",
+                params,
+            ).fetchone()
+            if not row:
+                return []
+
+            prior_session_id = row["id"]
+            messages = self._conn.execute(
+                "SELECT role, content FROM messages "
+                "WHERE session_id = ? "
+                "ORDER BY timestamp, id",
+                (prior_session_id,),
+            ).fetchall()
+
+        # Walk from the end to find the last N (user, assistant) pairs
+        pairs: List[Dict[str, Any]] = []
+        i = len(messages) - 1
+        while i >= 1 and len(pairs) < n_pairs:
+            curr = messages[i]
+            prev = messages[i - 1]
+            if curr["role"] == "assistant" and prev["role"] == "user":
+                pairs.append({"role": "user", "content": prev["content"]})
+                pairs.append({"role": "assistant", "content": curr["content"]})
+                i -= 2
+            else:
+                i -= 1
+        pairs.reverse()
+        return pairs
 
     def session_count(self, source: str = None) -> int:
         """Count sessions, optionally filtered by source."""
