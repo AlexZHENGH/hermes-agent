@@ -265,13 +265,14 @@ async def _summarize_session(
 _HIDDEN_SESSION_SOURCES = ("tool",)
 
 
-def _list_recent_sessions(db, limit: int, current_session_id: str = None) -> str:
+def _list_recent_sessions(db, limit: int, current_session_id: str = None, chat_id: str = None) -> str:
     """Return metadata for the most recent sessions (no LLM calls)."""
     try:
         sessions = db.list_sessions_rich(
             limit=limit + 5,
             exclude_sources=list(_HIDDEN_SESSION_SOURCES),
             order_by_last_active=True,
+            chat_id=chat_id,
         )  # fetch extra to skip current
 
         # Resolve current session lineage to exclude it
@@ -326,6 +327,7 @@ def session_search(
     query: str,
     role_filter: str = None,
     limit: int = 3,
+    chat_id: str = None,
     db=None,
     current_session_id: str = None,
 ) -> str:
@@ -359,7 +361,7 @@ def session_search(
     # Recent sessions mode: when query is empty, return metadata for recent sessions.
     # No LLM calls — just DB queries for titles, previews, timestamps.
     if not query or not query.strip():
-        return _list_recent_sessions(db, limit, current_session_id)
+        return _list_recent_sessions(db, limit, current_session_id, chat_id)
 
     query = query.strip()
 
@@ -588,6 +590,10 @@ SESSION_SEARCH_SCHEMA = {
                 "description": "Max sessions to summarize (default: 3, max: 5).",
                 "default": 3,
             },
+            "chat_id": {
+                "type": "string",
+                "description": "Optional: filter results to sessions from a specific chat/channel. When provided, only sessions matching this chat_id are returned. Use this to limit search to the current conversation.",
+            },
         },
         "required": [],
     },
@@ -605,6 +611,7 @@ registry.register(
         query=args.get("query") or "",
         role_filter=args.get("role_filter"),
         limit=args.get("limit", 3),
+        chat_id=args.get("chat_id"),
         db=kw.get("db"),
         current_session_id=kw.get("current_session_id")),
     check_fn=check_session_search_requirements,
